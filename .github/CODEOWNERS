@@ -1,17 +1,2 @@
-# GlobiGuard Project Code Owners
-# This file defines code owner responsibilities
-
 * @globi-explore/maintainers
 
-# Core SDK
-src/globiguard/ @globi-explore/maintainers
-
-# Tests
-tests/ @globi-explore/maintainers
-
-# CI/CD and DevOps
-.github/ @globi-explore/maintainers
-
-# Documentation
-*.md @globi-explore/maintainers
-docs/ @globi-explore/maintainers
