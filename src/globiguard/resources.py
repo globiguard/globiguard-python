@@ -259,13 +259,48 @@ class QueueClient:
         action: str,
         reviewed_by: str | None = None,
         notes: str | None = None,
+        reason_code: str | None = None,
+        modified_payload_summary: dict[str, Any] | None = None,
+        assigned_approver_id: str | None = None,
+        escalated_by: str | None = None,
     ) -> Any:
         if self._read_only:
             raise GlobiguardConfigError("decide requires a server client.")
+        if action not in {"approve", "reject", "modify", "escalate", "resume"}:
+            raise GlobiguardConfigError(
+                "action must be approve, reject, modify, escalate, or resume."
+            )
+        if action == "modify" and modified_payload_summary is None:
+            raise GlobiguardConfigError(
+                "modified_payload_summary is required for modify."
+            )
+        if action == "escalate" and (not escalated_by or not reason_code):
+            raise GlobiguardConfigError(
+                "escalated_by and reason_code are required for escalate."
+            )
+        body: dict[str, Any] = {}
+        if action in {"approve", "reject", "modify"}:
+            body.update({"reviewedBy": reviewed_by, "notes": notes})
+        if action == "modify":
+            body.update(
+                {
+                    "reasonCode": reason_code,
+                    "modifiedPayloadSummary": modified_payload_summary,
+                }
+            )
+        if action == "escalate":
+            body.update(
+                {
+                    "assignedApproverId": assigned_approver_id,
+                    "escalatedBy": escalated_by,
+                    "reasonCode": reason_code,
+                    "notes": notes,
+                }
+            )
         return self._transport.request(
             f"/v1/queue/{encode_path_segment(queue_entry_id)}/{action}",
             method="POST",
-            body={"reviewedBy": reviewed_by, "notes": notes},
+            body={key: value for key, value in body.items() if value is not None},
         )
 
 

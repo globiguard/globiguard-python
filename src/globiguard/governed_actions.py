@@ -54,32 +54,7 @@ class GovernedActionsClient:
 
     def authorize_action_or_throw(self, request: dict[str, Any]) -> Any:
         decision = self._actions.authorize(request)
-        if decision.get("decision") == "BLOCK":
-            raise GlobiguardAuthorityError(
-                kind="POLICY_BLOCKED",
-                message="GlobiGuard blocked the governed action.",
-                authorization_id=decision.get("authorizationId"),
-                queue_entry_id=decision.get("queueEntryId"),
-                safe_details={
-                    "decision": decision.get("decision"),
-                    "reason": decision.get("reason"),
-                },
-            )
-        if decision.get("decision") == "QUEUE":
-            raise GlobiguardAuthorityError(
-                kind="QUEUED_FOR_REVIEW",
-                message=(
-                    "GlobiGuard queued the governed action for review; do not "
-                    "perform the downstream business action yet."
-                ),
-                authorization_id=decision.get("authorizationId"),
-                queue_entry_id=decision.get("queueEntryId"),
-                safe_details={
-                    "decision": decision.get("decision"),
-                    "approvalState": decision.get("approvalState"),
-                },
-            )
-        return decision
+        return _require_executable_decision(decision)
 
     def request_approval(self, request: dict[str, Any]) -> Any:
         return self._actions.create_approval(request)
@@ -112,14 +87,35 @@ class GovernedActionsClient:
         for attempt in range(1, max_attempts + 1):
             entry = self._queue.get(queue_entry_id)
             status = entry.get("status")
-            if status in {"APPROVED", "AUTO_APPROVED"}:
+            if status in {"APPROVED", "AUTO_APPROVED", "RESUMED"}:
                 return entry
-            if status in {"REJECTED", "EXPIRED"}:
+            if status in {"REJECTED", "EXPIRED", "FAILED"}:
                 raise GlobiguardAuthorityError(
                     kind="POLICY_BLOCKED",
                     message=(
                         f"Queued action resolved as {status}; do not perform the "
                         "downstream business action."
+                    ),
+                    queue_entry_id=entry.get("id"),
+                    safe_details={"status": status},
+                )
+            if status == "MODIFIED":
+                raise GlobiguardAuthorityError(
+                    kind="STEP_UP_REQUIRED",
+                    message=(
+                        "The reviewer approved a modified action summary. Rebuild "
+                        "the real payload from the authoritative review result and "
+                        "request a new authorization before executing it."
+                    ),
+                    queue_entry_id=entry.get("id"),
+                    safe_details={"status": status},
+                )
+            if status not in {"PENDING", "ESCALATED"}:
+                raise GlobiguardAuthorityError(
+                    kind="CONTROL_PLANE_UNAVAILABLE",
+                    message=(
+                        "GlobiGuard returned an unsupported approval state; the "
+                        "downstream business action remains stopped."
                     ),
                     queue_entry_id=entry.get("id"),
                     safe_details={"status": status},
@@ -135,6 +131,55 @@ class GovernedActionsClient:
             ),
             queue_entry_id=queue_entry_id,
         )
+
+
+def _require_executable_decision(decision: Any) -> dict[str, Any]:
+    if not isinstance(decision, dict):
+        raise GlobiguardAuthorityError(
+            kind="CONTROL_PLANE_UNAVAILABLE",
+            message=(
+                "GlobiGuard returned an invalid decision response; do not perform "
+                "the downstream business action."
+            ),
+        )
+    decision_name = decision.get("decision")
+    if decision_name in {"ALLOW", "MODIFY"}:
+        return decision
+    if decision_name == "BLOCK":
+        raise GlobiguardAuthorityError(
+            kind="POLICY_BLOCKED",
+            message="GlobiGuard blocked the governed action.",
+            authorization_id=decision.get("authorizationId"),
+            queue_entry_id=decision.get("queueEntryId"),
+            safe_details={
+                "decision": decision_name,
+                "reason": decision.get("reason"),
+            },
+        )
+    if decision_name == "QUEUE":
+        raise GlobiguardAuthorityError(
+            kind="QUEUED_FOR_REVIEW",
+            message=(
+                "GlobiGuard queued the governed action for review; do not "
+                "perform the downstream business action yet."
+            ),
+            authorization_id=decision.get("authorizationId"),
+            queue_entry_id=decision.get("queueEntryId"),
+            safe_details={
+                "decision": decision_name,
+                "approvalState": decision.get("approvalState"),
+            },
+        )
+    raise GlobiguardAuthorityError(
+        kind="CONTROL_PLANE_UNAVAILABLE",
+        message=(
+            "GlobiGuard returned an unsupported decision; do not perform the "
+            "downstream business action."
+        ),
+        authorization_id=decision.get("authorizationId"),
+        queue_entry_id=decision.get("queueEntryId"),
+        safe_details={"decision": decision_name},
+    )
 
 
 def _assert_non_empty(name: str, value: str) -> None:

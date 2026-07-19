@@ -2,7 +2,7 @@
 
 Official dependency-minimal Python SDK for GlobiGuard.
 
-This package is designed for production services, humans, and AI agents that need a small, understandable integration surface. It intentionally uses the Python standard library for runtime behavior: no `requests`, no `httpx`, no pydantic, no framework dependency, and no hidden telemetry.
+This package provides a small, auditable integration surface for production services. It intentionally uses the Python standard library for runtime behavior: no `requests`, no `httpx`, no pydantic, no framework dependency, and no hidden telemetry.
 
 ## What is included
 
@@ -56,9 +56,21 @@ client = globiguard.create_server_client(
 
 decision = client.governed_actions.authorize_action_or_throw(
     {
-        "actionType": "refund",
-        "actor": {"id": "user_123"},
-        "target": {"id": "order_456"},
+        "context": {
+            "actionType": "refund.create",
+            "destination": {
+                "type": "custom",
+                "name": "payments-production",
+            },
+            "dataClasses": ["CONFIDENTIAL"],
+            "actor": {
+                "id": "support-agent-123",
+                "type": "agent",
+            },
+            "purpose": "Resolve an approved customer escalation",
+            "correlationId": "case_456",
+            "idempotencyKey": "case_456:refund:v1",
+        }
     }
 )
 ```
@@ -103,6 +115,16 @@ client.policies.activate("pol_123")
 
 client.queue.list(status="PENDING")
 client.queue.decide("queue_123", action="approve", reviewed_by="user_123")
+client.queue.decide(
+    "queue_456",
+    action="modify",
+    reviewed_by="user_123",
+    reason_code="REMOVE_SSN",
+    modified_payload_summary={
+        "sha256": "reviewed-payload-digest",
+        "fieldTypes": ["CUSTOMER_ID"],
+    },
+)
 
 client.workflows.list(active=True)
 client.workflows.run("wf_123", {"source": "python"})

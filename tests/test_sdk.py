@@ -172,23 +172,38 @@ class GlobiguardSdkTests(unittest.TestCase):
 
     def test_authorize_or_throw_preserves_fail_closed_semantics(self) -> None:
         class Actions:
-            def authorize(self, _request: dict[str, Any]) -> dict[str, Any]:
-                return {
-                    "decision": "QUEUE",
-                    "authorizationId": "auth_123",
-                    "queueEntryId": "queue_123",
-                    "approvalState": "PENDING",
-                }
+            def __init__(self, decision: Any) -> None:
+                self.decision = decision
 
-        governed = globiguard.GovernedActionsClient(
-            actions=Actions(),  # type: ignore[arg-type]
-            audit=object(),  # type: ignore[arg-type]
-            queue=object(),  # type: ignore[arg-type]
-        )
-        with self.assertRaises(GlobiguardAuthorityError) as error:
-            governed.authorize_action_or_throw({"actionType": "refund"})
-        self.assertEqual(error.exception.kind, "QUEUED_FOR_REVIEW")
-        self.assertEqual(error.exception.queue_entry_id, "queue_123")
+            def authorize(self, _request: dict[str, Any]) -> dict[str, Any]:
+                return self.decision  # type: ignore[no-any-return]
+
+        for decision_name in ("ALLOW", "MODIFY"):
+            with self.subTest(decision=decision_name):
+                governed = globiguard.GovernedActionsClient(
+                    actions=Actions({"decision": decision_name}),  # type: ignore[arg-type]
+                    audit=object(),  # type: ignore[arg-type]
+                    queue=object(),  # type: ignore[arg-type]
+                )
+                result = governed.authorize_action_or_throw({"actionType": "refund"})
+                self.assertEqual(result["decision"], decision_name)
+
+        for decision, expected_kind in (
+            ({"decision": "QUEUE", "queueEntryId": "queue_123"}, "QUEUED_FOR_REVIEW"),
+            ({"decision": "BLOCK"}, "POLICY_BLOCKED"),
+            ({"decision": "UNKNOWN"}, "CONTROL_PLANE_UNAVAILABLE"),
+            ({}, "CONTROL_PLANE_UNAVAILABLE"),
+            ([], "CONTROL_PLANE_UNAVAILABLE"),
+        ):
+            with self.subTest(decision=decision):
+                governed = globiguard.GovernedActionsClient(
+                    actions=Actions(decision),  # type: ignore[arg-type]
+                    audit=object(),  # type: ignore[arg-type]
+                    queue=object(),  # type: ignore[arg-type]
+                )
+                with self.assertRaises(GlobiguardAuthorityError) as error:
+                    governed.authorize_action_or_throw({"actionType": "refund"})
+                self.assertEqual(error.exception.kind, expected_kind)
 
     def test_verifies_signed_entitlement_manifest_and_rejects_tampering(self) -> None:
         public_key = "0EBi8A20QIJf5lwzzj98ZK1X8EzBJ2nli7rsMM8JXzc"
