@@ -422,5 +422,100 @@ class GlobiguardSdkTests(unittest.TestCase):
         self.assertIs(mock_client.chat.completions, original_completions)
 
 
+    def _make_intercept(self, *, mode: str = "scan_input") -> Any:
+        from globiguard.ai_intercept import AiIntercept
+        from globiguard.governed_actions import GovernedActionsClient
+
+        class FakeActions:
+            def __init__(self) -> None:
+                self.calls: list[Any] = []
+
+            def authorize(self, request: dict[str, Any]) -> dict[str, Any]:
+                self.calls.append(request)
+                return {"decision": "ALLOW"}
+
+        class FakeQueue:
+            pass
+
+        class FakeAudit:
+            pass
+
+        self._fake_actions = FakeActions()
+        governed = GovernedActionsClient(
+            actions=self._fake_actions,  # type: ignore[arg-type]
+            audit=FakeAudit(),  # type: ignore[arg-type]
+            queue=FakeQueue(),  # type: ignore[arg-type]
+        )
+        return AiIntercept(governed, mode=mode)
+
+    def test_google_proxy_does_not_mutate(self) -> None:
+        intercept = self._make_intercept()
+
+        original_fn = lambda **kw: type("R", (), {"text": "hi"})()  # noqa: E731
+        model = type("FakeModel", (), {})()
+        model.generate_content = original_fn  # instance attr avoids descriptor wrapping
+
+        intercept.google(model)
+
+        self.assertIs(model.generate_content, original_fn)
+
+    def test_bedrock_proxy_extracts_input(self) -> None:
+        intercept = self._make_intercept()
+
+        def fake_converse(**kwargs: Any) -> dict[str, Any]:
+            return {"output": {"message": {"content": [{"text": "pong"}]}}}
+
+        client = type("FakeBedrockClient", (), {})()
+        client.converse = fake_converse  # instance attr avoids bound-method injection
+
+        proxy = intercept.bedrock(client)
+        proxy.converse(
+            modelId="us.amazon.nova-pro-v1:0",
+            messages=[{"role": "user", "content": [{"text": "ping"}]}],
+        )
+
+        self.assertEqual(len(self._fake_actions.calls), 1)
+        context = self._fake_actions.calls[0]["context"]
+        self.assertEqual(context["actionType"], "ai.request")
+
+    def test_cohere_proxy_v1_input(self) -> None:
+        intercept = self._make_intercept()
+
+        def fake_chat(**kwargs: Any) -> Any:
+            return type("R", (), {"text": "hello back"})()
+
+        client = type("FakeCohereClient", (), {})()
+        client.chat = fake_chat  # instance attr avoids bound-method injection
+
+        proxy = intercept.cohere(client)
+        proxy.chat(message="hello")
+
+        self.assertEqual(len(self._fake_actions.calls), 1)
+
+    def test_mistral_proxy_does_not_mutate(self) -> None:
+        intercept = self._make_intercept()
+
+        original_complete = lambda **kw: None  # noqa: E731
+        chat = type("FakeMistralChat", (), {})()
+        chat.complete = original_complete  # instance attr avoids descriptor wrapping
+        client = type("FakeMistralClient", (), {})()
+        client.chat = chat
+
+        intercept.mistral(client)
+
+        self.assertIs(client.chat.complete, original_complete)
+
+    def test_ollama_proxy_does_not_mutate(self) -> None:
+        intercept = self._make_intercept()
+
+        original_chat = lambda **kw: None  # noqa: E731
+        client = type("FakeOllamaClient", (), {})()
+        client.chat = original_chat  # instance attr avoids descriptor wrapping
+
+        intercept.ollama(client)
+
+        self.assertIs(client.chat, original_chat)
+
+
 if __name__ == "__main__":
     unittest.main()
