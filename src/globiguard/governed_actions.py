@@ -4,10 +4,13 @@ import hashlib
 import json
 import secrets
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from .errors import GlobiguardAuthorityError, GlobiguardConfigError
 from .resources import ActionsClient, AuditClient, QueueClient
+
+if TYPE_CHECKING:
+    from .brain import BrainClient
 
 
 def derive_action_idempotency_key(
@@ -44,10 +47,12 @@ class GovernedActionsClient:
         actions: ActionsClient,
         audit: AuditClient,
         queue: QueueClient,
+        brain: BrainClient | None = None,
     ) -> None:
         self._actions = actions
         self._audit = audit
         self._queue = queue
+        self._brain = brain
 
     def authorize_action(self, request: dict[str, Any]) -> Any:
         return self._actions.authorize(request)
@@ -73,6 +78,32 @@ class GovernedActionsClient:
 
     def get_incident_replay(self, **request: str | None) -> Any:
         return self._audit.get_incident_replay(**request)
+
+    def detect_and_authorize(self, request: dict[str, Any]) -> Any:
+        if self._brain is not None:
+            classification = self._brain.classify({"text": request["text"]})
+            data_class = classification.get("dataClass") or classification.get("data_class")
+            detected_entities = classification.get("detectedEntities") or classification.get("detected_entities")
+            return self._actions.authorize({
+                "context": {
+                    "actionType": request["action_type"],
+                    "destination": request["destination"],
+                    "dataClasses": [data_class] if data_class else [],
+                    "purpose": request.get("purpose"),
+                    "idempotencyKey": request.get("idempotency_key"),
+                    "metadata": {**(request.get("metadata") or {}), "detectedEntities": detected_entities},
+                }
+            })
+        return self._actions.authorize({
+            "context": {
+                "actionType": request["action_type"],
+                "destination": request["destination"],
+                "dataClasses": [request["data_class"]] if request.get("data_class") else [],
+                "purpose": request.get("purpose"),
+                "idempotencyKey": request.get("idempotency_key"),
+                "metadata": request.get("metadata"),
+            }
+        })
 
     def wait_for_approval(
         self,

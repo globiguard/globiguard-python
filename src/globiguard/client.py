@@ -3,9 +3,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Literal
 
+from .brain import BrainClient
 from .credentials import Credential, Environment, LocalCredential, SecretCredential
 from .errors import GlobiguardConfigError
 from .governed_actions import GovernedActionsClient
+from .observability import ObservabilityClient
 from .resources import (
     ActionsClient,
     AuditClient,
@@ -39,7 +41,8 @@ class ServerClient:
     queue: QueueClient
     workflows: WorkflowsClient
     governed_actions: GovernedActionsClient
-    brain: Transport | None = None
+    observe: ObservabilityClient
+    brain: BrainClient | None = None
     gateway: Transport | None = None
     sidecar: Transport | None = None
 
@@ -88,7 +91,7 @@ def create_server_client(
         timeout,
         opener,
     )
-    brain = _optional_transport(
+    brain_transport = _optional_transport(
         services.get("brain"), client_name, credential, environment, timeout, opener
     )
     gateway = _optional_transport(
@@ -105,6 +108,7 @@ def create_server_client(
     actions = ActionsClient(action_transport)
     audit = AuditClient(control_plane)
     queue = QueueClient(control_plane)
+    brain = BrainClient(brain_transport) if brain_transport is not None else None
 
     return ServerClient(
         kind="server",
@@ -125,7 +129,9 @@ def create_server_client(
             actions=actions,
             audit=audit,
             queue=queue,
+            brain=brain,
         ),
+        observe=ObservabilityClient(control_plane),
     )
 
 

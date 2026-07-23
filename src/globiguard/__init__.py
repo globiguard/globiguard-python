@@ -1,3 +1,5 @@
+from .ai_intercept import AiIntercept
+from .brain import BrainClient
 from .client import (
     ActionGatewayConfig,
     BrowserClient,
@@ -5,6 +7,7 @@ from .client import (
     create_browser_client,
     create_server_client,
 )
+from .observability import ObservabilityClient
 from .bootstrap import (
     GLOBIGUARD_DEPLOYMENT_MODES,
     GLOBIGUARD_INSTALL_ISSUER_MODES,
@@ -43,8 +46,11 @@ from .server import (
 
 __all__ = [
     "ActionGatewayConfig",
+    "AiIntercept",
+    "BrainClient",
     "BrowserClient",
     "BootstrapProfile",
+    "ObservabilityClient",
     "Credential",
     "Environment",
     "GLOBIGUARD_DEPLOYMENT_MODES",
