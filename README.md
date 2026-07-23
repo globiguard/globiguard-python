@@ -131,6 +131,83 @@ client.workflows.run("wf_123", {"source": "python"})
 client.workflows.list_runs("wf_123")
 ```
 
+## AI intercept
+
+`AiIntercept` wraps any AI provider call with a GlobiGuard governance checkpoint. Input is authorized before the model is called; output is classified and authorized if sensitive. Supports OpenAI, Anthropic, Google GenAI, AWS Bedrock, Cohere, Mistral, Ollama, LangChain, LlamaIndex, and any callable via `generic()`.
+
+```python
+from globiguard import create_server_client, SecretCredential
+from globiguard.ai_intercept import AiIntercept
+import openai
+
+client = create_server_client(
+    environment="live",
+    services={"controlPlane": "https://api.globiguard.com", "brain": "https://brain.globiguard.com"},
+    credential=SecretCredential(project_id="proj_123", token="sk_...", environment="live"),
+)
+
+intercept = AiIntercept(client.governed_actions, brain=client.brain)
+
+# OpenAI — returns a proxy, call exactly like the original client
+governed_openai = intercept.openai(openai.OpenAI())
+response = governed_openai.chat.completions.create(
+    model="gpt-4o",
+    messages=[{"role": "user", "content": "Summarise this contract..."}],
+)
+
+# Anthropic
+import anthropic
+governed_anthropic = intercept.anthropic(anthropic.Anthropic())
+msg = governed_anthropic.messages.create(model="claude-opus-4-8", max_tokens=1024, messages=[...])
+
+# Google GenAI
+import google.generativeai as genai
+governed_model = intercept.google(genai.GenerativeModel("gemini-1.5-pro"))
+result = governed_model.generate_content("Draft a privacy policy...")
+
+# AWS Bedrock
+import boto3
+bedrock = boto3.client("bedrock-runtime", region_name="us-east-1")
+governed_bedrock = intercept.bedrock(bedrock)
+response = governed_bedrock.converse(
+    modelId="anthropic.claude-3-5-sonnet-20241022-v2:0",
+    messages=[{"role": "user", "content": [{"text": "Hello"}]}],
+)
+
+# Cohere
+import cohere
+governed_cohere = intercept.cohere(cohere.Client("api-key"))
+response = governed_cohere.chat(message="Summarise...")
+
+# Mistral
+from mistralai import Mistral
+governed_mistral = intercept.mistral(Mistral(api_key="..."))
+response = governed_mistral.chat.complete(model="mistral-large-latest", messages=[...])
+
+# Ollama
+import ollama
+governed_ollama = intercept.ollama(ollama.Client())
+response = governed_ollama.chat(model="llama3", messages=[{"role": "user", "content": "Hello"}])
+
+# LangChain — callback handler, works across all LangChain providers
+from langchain_openai import ChatOpenAI
+llm = ChatOpenAI(model="gpt-4o")
+handler = intercept.langchain_callback()
+result = llm.invoke("Draft a contract...", config={"callbacks": [handler]})
+
+# LlamaIndex — callback manager
+from llama_index.core import Settings
+from llama_index.core.callbacks import CallbackManager
+Settings.callback_manager = CallbackManager([intercept.llamaindex_callback()])
+
+# Any provider via generic()
+def my_provider(prompt: str) -> str: ...
+governed_fn = intercept.generic(my_provider, extract_input=lambda p: p)
+result = governed_fn(prompt="Hello")
+```
+
+By default, `AiIntercept` runs in `scan_both` mode — it scans input before the call and output after. Set `mode="scan_input"` or `mode="scan_output"` to restrict scope. When a governance decision is `BLOCK`, `GlobiguardAuthorityError` is raised; pass `on_block` to handle it yourself instead.
+
 ## Bootstrap installs
 
 Bootstrap helpers keep install registration and heartbeat payloads aligned with the hosted/self-hosted/sovereign deployment contract.
