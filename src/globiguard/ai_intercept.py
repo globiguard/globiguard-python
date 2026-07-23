@@ -52,7 +52,7 @@ class AiIntercept:
             output_text = _extract_text(response)
             if output_text:
                 classification = self._brain.classify({"text": output_text})
-                data_class = classification.get("data_class", "PUBLIC")
+                data_class = classification.get("dataClass") or classification.get("data_class") or "PUBLIC"
                 if data_class in ("RESTRICTED", "SECRET", "PII", "PHI", "PCI"):
                     output_decision = self._governed.authorize_action({
                         "context": {
@@ -69,36 +69,10 @@ class AiIntercept:
         }
 
     def openai(self, client: Any) -> Any:
-        """Wrap an OpenAI client's chat.completions.create with governance."""
-        intercept = self
-        original_create = client.chat.completions.create
-
-        @functools.wraps(original_create)
-        def governed_create(**params: Any) -> Any:
-            messages = params.get("messages", [])
-            input_text = "\n".join(
-                m.get("content", "") for m in messages if isinstance(m.get("content"), str)
-            )
-            return intercept.wrap(input_text, original_create, **params)["response"]
-
-        client.chat.completions.create = governed_create
-        return client
+        return _OpenAIClientProxy(client, self)
 
     def anthropic(self, client: Any) -> Any:
-        """Wrap an Anthropic client's messages.create with governance."""
-        intercept = self
-        original_create = client.messages.create
-
-        @functools.wraps(original_create)
-        def governed_create(**params: Any) -> Any:
-            messages = params.get("messages", [])
-            input_text = "\n".join(
-                m.get("content", "") for m in messages if isinstance(m.get("content"), str)
-            )
-            return intercept.wrap(input_text, original_create, **params)["response"]
-
-        client.messages.create = governed_create
-        return client
+        return _AnthropicClientProxy(client, self)
 
     def generic(self, call_fn: Callable[..., Any], *, extract_input: Callable[..., str] | None = None) -> Callable[..., Any]:
         """Return a governed wrapper around any callable AI provider.
@@ -114,6 +88,69 @@ class AiIntercept:
             return intercept.wrap(input_text, call_fn, **kwargs)["response"]
 
         return governed
+
+
+class _OpenAICompletionsProxy:
+    def __init__(self, completions: Any, intercept: AiIntercept) -> None:
+        self._completions = completions
+        self._intercept = intercept
+        self.create = self._governed_create
+
+    def _governed_create(self, **params: Any) -> Any:
+        original_create = self._completions.create
+        messages = params.get("messages", [])
+        input_text = "\n".join(
+            m.get("content", "") for m in messages if isinstance(m.get("content"), str)
+        )
+        return self._intercept.wrap(input_text, original_create, **params)["response"]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._completions, name)
+
+
+class _OpenAIChatProxy:
+    def __init__(self, chat: Any, intercept: AiIntercept) -> None:
+        self._chat = chat
+        self.completions = _OpenAICompletionsProxy(chat.completions, intercept)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._chat, name)
+
+
+class _OpenAIClientProxy:
+    def __init__(self, client: Any, intercept: AiIntercept) -> None:
+        self._client = client
+        self.chat = _OpenAIChatProxy(client.chat, intercept)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
+
+
+class _AnthropicMessagesProxy:
+    def __init__(self, messages: Any, intercept: AiIntercept) -> None:
+        self._messages = messages
+        self._intercept = intercept
+        self.create = self._governed_create
+
+    def _governed_create(self, **params: Any) -> Any:
+        original_create = self._messages.create
+        messages = params.get("messages", [])
+        input_text = "\n".join(
+            m.get("content", "") for m in messages if isinstance(m.get("content"), str)
+        )
+        return self._intercept.wrap(input_text, original_create, **params)["response"]
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._messages, name)
+
+
+class _AnthropicClientProxy:
+    def __init__(self, client: Any, intercept: AiIntercept) -> None:
+        self._client = client
+        self.messages = _AnthropicMessagesProxy(client.messages, intercept)
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._client, name)
 
 
 def _extract_text(response: Any) -> str | None:

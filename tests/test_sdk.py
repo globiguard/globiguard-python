@@ -271,5 +271,156 @@ class GlobiguardSdkTests(unittest.TestCase):
             )
 
 
+    def _make_transport(self, opener: Any) -> Any:
+        from globiguard.transport import Transport
+        from globiguard.credentials import LocalCredential
+        return Transport(
+            base_url="http://localhost:3000",
+            client_name="test",
+            credential=LocalCredential(project_id="proj_test", token=None),
+            environment="local",
+            timeout=5.0,
+            opener=opener,
+        )
+
+    def test_brain_client_scan(self) -> None:
+        import json
+        from globiguard.brain import BrainClient
+
+        opener = RecordingOpener()
+        client = BrainClient(self._make_transport(opener))
+        client.scan({"text": "hello"})
+
+        request, _ = opener.requests[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertIn("/v1/brain/scan", request.full_url)
+        self.assertEqual(json.loads(request.data), {"text": "hello"})
+
+    def test_brain_client_redact(self) -> None:
+        import json
+        from globiguard.brain import BrainClient
+
+        opener = RecordingOpener()
+        client = BrainClient(self._make_transport(opener))
+        client.redact({"text": "secret"})
+
+        request, _ = opener.requests[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertIn("/v1/brain/redact", request.full_url)
+        self.assertEqual(json.loads(request.data), {"text": "secret"})
+
+    def test_brain_client_classify(self) -> None:
+        import json
+        from globiguard.brain import BrainClient
+
+        opener = RecordingOpener()
+        client = BrainClient(self._make_transport(opener))
+        client.classify({"text": "hello"})
+
+        request, _ = opener.requests[0]
+        self.assertEqual(request.get_method(), "POST")
+        self.assertIn("/v1/brain/classify", request.full_url)
+        self.assertEqual(json.loads(request.data), {"text": "hello"})
+
+    def test_observability_get_traces(self) -> None:
+        from globiguard.observability import ObservabilityClient
+
+        opener = RecordingOpener()
+        client = ObservabilityClient(self._make_transport(opener))
+        client.get_traces(workflowId="abc")
+
+        request, _ = opener.requests[0]
+        self.assertEqual(request.get_method(), "GET")
+        self.assertIn("/v1/observability/traces", request.full_url)
+        self.assertIn("workflowId=abc", request.full_url)
+
+    def test_observability_get_trace_encodes_id(self) -> None:
+        from globiguard.observability import ObservabilityClient
+
+        opener = RecordingOpener()
+        client = ObservabilityClient(self._make_transport(opener))
+        client.get_trace("some/id with spaces")
+
+        request, _ = opener.requests[0]
+        url = request.full_url
+        self.assertNotIn("some/id with spaces", url)
+        self.assertIn("some%2Fid%20with%20spaces", url)
+
+    def test_ai_intercept_output_key_camelcase(self) -> None:
+        from globiguard.ai_intercept import AiIntercept
+
+        authorized_calls: list[Any] = []
+
+        class FakeBrain:
+            def classify(self, _request: Any) -> dict[str, Any]:
+                return {"dataClass": "PII"}
+
+        class FakeActions:
+            def authorize(self, request: dict[str, Any]) -> dict[str, Any]:
+                authorized_calls.append(request)
+                return {"decision": "ALLOW"}
+
+        class FakeQueue:
+            pass
+
+        class FakeAudit:
+            pass
+
+        from globiguard.governed_actions import GovernedActionsClient
+        governed = GovernedActionsClient(
+            actions=FakeActions(),  # type: ignore[arg-type]
+            audit=FakeAudit(),  # type: ignore[arg-type]
+            queue=FakeQueue(),  # type: ignore[arg-type]
+        )
+        intercept = AiIntercept(governed, brain=FakeBrain(), mode="scan_output")  # type: ignore[arg-type]
+
+        intercept.wrap("hello", lambda: "PII data here")
+
+        self.assertEqual(len(authorized_calls), 1)
+        data_classes = authorized_calls[0]["context"]["dataClasses"]
+        self.assertIn("PII", data_classes)
+
+    def test_ai_intercept_does_not_mutate_client(self) -> None:
+        from globiguard.ai_intercept import AiIntercept
+
+        class FakeActions:
+            def authorize(self, request: dict[str, Any]) -> dict[str, Any]:
+                return {"decision": "ALLOW"}
+
+        class FakeQueue:
+            pass
+
+        class FakeAudit:
+            pass
+
+        from globiguard.governed_actions import GovernedActionsClient
+        governed = GovernedActionsClient(
+            actions=FakeActions(),  # type: ignore[arg-type]
+            audit=FakeAudit(),  # type: ignore[arg-type]
+            queue=FakeQueue(),  # type: ignore[arg-type]
+        )
+        intercept = AiIntercept(governed, mode="scan_input")
+
+        original_create = lambda **kw: None  # noqa: E731
+
+        class FakeCompletions:
+            create = original_create
+
+        class FakeChat:
+            completions = FakeCompletions()
+
+        class FakeOpenAIClient:
+            chat = FakeChat()
+
+        mock_client = FakeOpenAIClient()
+        original_chat = mock_client.chat
+        original_completions = mock_client.chat.completions
+
+        intercept.openai(mock_client)
+
+        self.assertIs(mock_client.chat, original_chat)
+        self.assertIs(mock_client.chat.completions, original_completions)
+
+
 if __name__ == "__main__":
     unittest.main()
